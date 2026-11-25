@@ -1,3 +1,5 @@
+const PROMPT_GENERATOR_MODEL = '@cf/google/gemma-4-26b-a4b-it';
+
 const MODEL_REGISTRY = {
   // 公开模型（无需管理员密码）
   'flux-2-klein-4b': {
@@ -76,6 +78,7 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, X-Admin-Password',
+  'Access-Control-Expose-Headers': 'X-Enhanced-Prompt',
 };
 
 function jsonResponse(payload, status = 200) {
@@ -134,6 +137,45 @@ function detectImageMime(bytes) {
   return 'image/png';
 }
 
+function extractLlmText(result) {
+  const raw =
+    result?.choices?.[0]?.message?.content ??
+    result?.response ??
+    (typeof result === 'string' ? result : '');
+  return String(raw)
+    .replace(/^```[\w-]*\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .replace(/^["'“”]+|["'“”]+$/g, '')
+    .trim();
+}
+
+async function generateEnhancedPrompt(env, rawPrompt) {
+  const hasInput = Boolean(rawPrompt && rawPrompt.trim());
+  const systemInstruction =
+    'You are an expert prompt engineer for modern text-to-image models (FLUX.2, FLUX.1, Leonardo). ' +
+    'Output ONLY one vivid, natural-language English image generation prompt (60-110 words) describing subject, composition, lighting, atmosphere, color palette, and visual style. ' +
+    'Do not include explanations, headings, bullet points, or quotation marks.';
+
+  const userMessage = hasInput
+    ? `Translate (if not English) and enrich the following idea into a cohesive, detailed English image prompt while staying faithful to the user's intent:\n\n${rawPrompt.trim()}`
+    : 'Invent one original, visually striking scene and write a detailed English text-to-image prompt for it.';
+
+  const result = await env.AI.run(PROMPT_GENERATOR_MODEL, {
+    messages: [
+      { role: 'system', content: systemInstruction },
+      { role: 'user', content: userMessage },
+    ],
+    max_completion_tokens: 512,
+    temperature: 0.75,
+  });
+
+  const enhanced = extractLlmText(result);
+  if (!enhanced) {
+    throw new Error('Gemma 4 未返回有效提示词，请稍后重试');
+  }
+  return enhanced;
+}
+
 async function runModel(env, config, params) {
   const { prompt, negativePrompt, width, height, steps } = params;
 
@@ -171,45 +213,29 @@ async function runModel(env, config, params) {
   return env.AI.run(config.id, inputs);
 }
 
-async function normalizeImageResponse(aiResult) {
+async function normalizeImageResponse(aiResult, extraHeaders = {}) {
+  let bytes;
+
   if (aiResult && typeof aiResult === 'object' && typeof aiResult.image === 'string') {
-    const bytes = base64ToUint8Array(aiResult.image);
-    return new Response(bytes, {
-      status: 200,
-      headers: {
-        ...CORS_HEADERS,
-        'Content-Type': detectImageMime(bytes),
-        'Cache-Control': 'no-store',
-      },
-    });
-  }
-
-  if (aiResult instanceof ReadableStream) {
+    bytes = base64ToUint8Array(aiResult.image);
+  } else if (aiResult instanceof ReadableStream) {
     const buffer = await new Response(aiResult).arrayBuffer();
-    const bytes = new Uint8Array(buffer);
-    return new Response(bytes, {
-      status: 200,
-      headers: {
-        ...CORS_HEADERS,
-        'Content-Type': detectImageMime(bytes),
-        'Cache-Control': 'no-store',
-      },
-    });
+    bytes = new Uint8Array(buffer);
+  } else if (aiResult instanceof ArrayBuffer || ArrayBuffer.isView(aiResult)) {
+    bytes = aiResult instanceof Uint8Array ? aiResult : new Uint8Array(aiResult);
+  } else {
+    throw new Error('模型返回了无法识别的响应格式');
   }
 
-  if (aiResult instanceof ArrayBuffer || ArrayBuffer.isView(aiResult)) {
-    const bytes = aiResult instanceof Uint8Array ? aiResult : new Uint8Array(aiResult);
-    return new Response(bytes, {
-      status: 200,
-      headers: {
-        ...CORS_HEADERS,
-        'Content-Type': detectImageMime(bytes),
-        'Cache-Control': 'no-store',
-      },
-    });
-  }
-
-  throw new Error('模型返回了无法识别的响应格式');
+  return new Response(bytes, {
+    status: 200,
+    headers: {
+      ...CORS_HEADERS,
+      ...extraHeaders,
+      'Content-Type': detectImageMime(bytes),
+      'Cache-Control': 'no-store',
+    },
+  });
 }
 
 export default {
@@ -238,12 +264,24 @@ export default {
       return jsonResponse({ error: '请求体必须为合法的 JSON' }, 400);
     }
 
-    const prompt = typeof data?.prompt === 'string' ? data.prompt.trim() : '';
+    // 可选功能：单独调用 Gemma 4 生成/润色提示词
+    if (data?.action === 'enhance-prompt') {
+      try {
+        const rawPrompt = typeof data?.prompt === 'string' ? data.prompt : '';
+        const enhancedPrompt = await generateEnhancedPrompt(env, rawPrompt);
+        return jsonResponse({ prompt: enhancedPrompt, model: PROMPT_GENERATOR_MODEL }, 200);
+      } catch (err) {
+        return jsonResponse({ error: err?.message || 'AI 提示词生成失败，请稍后重试' }, 502);
+      }
+    }
+
+    const rawPrompt = typeof data?.prompt === 'string' ? data.prompt.trim() : '';
     const modelKey = typeof data?.model === 'string' ? data.model.trim() : 'flux-2-klein-4b';
     const negativePrompt =
       typeof data?.negative_prompt === 'string' ? data.negative_prompt.trim() : '';
+    const shouldEnhance = Boolean(data?.enhancePrompt);
 
-    if (!prompt) {
+    if (!rawPrompt) {
       return jsonResponse({ error: '请输入画面描述词（prompt）' }, 400);
     }
 
@@ -282,14 +320,22 @@ export default {
       : undefined;
 
     try {
+      let finalPrompt = rawPrompt;
+      const extraHeaders = {};
+
+      if (shouldEnhance) {
+        finalPrompt = await generateEnhancedPrompt(env, rawPrompt);
+        extraHeaders['X-Enhanced-Prompt'] = encodeURIComponent(finalPrompt);
+      }
+
       const aiResult = await runModel(env, config, {
-        prompt,
+        prompt: finalPrompt,
         negativePrompt,
         width,
         height,
         steps,
       });
-      return await normalizeImageResponse(aiResult);
+      return await normalizeImageResponse(aiResult, extraHeaders);
     } catch (err) {
       const message = err?.message || 'AI 绘图调用失败，请稍后重试';
       return jsonResponse({ error: message }, 502);
