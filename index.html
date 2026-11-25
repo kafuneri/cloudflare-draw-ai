@@ -1,0 +1,1094 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>AI 绘画创作平台</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    <meta name="description" content="基于 Cloudflare Workers AI 的在线 AI 绘画工具，支持 FLUX.2、FLUX.1 与 Leonardo 模型。">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black">
+    <meta name="apple-mobile-web-app-title" content="AI 绘画">
+    <style>
+        :root {
+            --primary-color: #4facfe;
+            --secondary-color: #00f2fe;
+            --text-color: #2c3e50;
+            --muted-text: #6b7280;
+            --card-background: rgba(255, 255, 255, 0.92);
+            --input-bg: #ffffff;
+            --border-color: #d1d5db;
+            --surface-bg: #f8fafc;
+            --danger-bg: #fef2f2;
+            --danger-border: #fecaca;
+            --danger-text: #b91c1c;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            min-height: 100%;
+            width: 100%;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #e6f5ff 0%, #ffe6f5 100%);
+            color: var(--text-color);
+            transition: background 0.3s ease, color 0.3s ease;
+        }
+
+        .container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .card {
+            background-color: var(--card-background);
+            backdrop-filter: blur(12px);
+            border-radius: 20px;
+            padding: 2rem;
+            box-shadow: 0 12px 28px rgba(0, 0, 0, 0.1);
+            width: 100%;
+            max-width: 640px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+        }
+
+        h1 {
+            font-size: 2rem;
+            margin: 0 0 1rem 0;
+            text-align: center;
+            background: linear-gradient(to right, var(--primary-color), var(--secondary-color));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .image-container {
+            width: 100%;
+            min-height: 320px;
+            max-height: 460px;
+            border-radius: 12px;
+            margin-bottom: 1rem;
+            background-color: rgba(0, 0, 0, 0.04);
+            border: 1px dashed var(--border-color);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .placeholder-text {
+            color: var(--muted-text);
+            font-size: 0.95rem;
+            text-align: center;
+            padding: 1rem;
+        }
+
+        #aiImage {
+            max-width: 100%;
+            max-height: 460px;
+            object-fit: contain;
+            display: none;
+        }
+
+        .loading-overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(255, 255, 255, 0.82);
+            display: none;
+            flex-direction: column;
+            gap: 12px;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+            font-size: 0.95rem;
+            color: #334155;
+        }
+
+        .loading-spinner {
+            border: 4px solid #e5e7eb;
+            border-top: 4px solid var(--primary-color);
+            border-radius: 50%;
+            width: 44px;
+            height: 44px;
+            animation: spin 0.9s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .field-block {
+            width: 100%;
+            margin-bottom: 0.85rem;
+        }
+
+        .field-label {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.85rem;
+            color: var(--muted-text);
+            margin-bottom: 0.35rem;
+        }
+
+        select,
+        input[type="text"],
+        input[type="password"],
+        input[type="number"] {
+            width: 100%;
+            padding: 0.7rem 0.85rem;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            font-size: 0.95rem;
+            background-color: var(--input-bg);
+            color: var(--text-color);
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        select:focus,
+        input:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(79, 172, 254, 0.2);
+        }
+
+        input:disabled,
+        select:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .model-hint {
+            font-size: 0.8rem;
+            color: var(--muted-text);
+            margin-top: 0.35rem;
+        }
+
+        .auth-panel {
+            width: 100%;
+            margin-bottom: 0.85rem;
+            padding: 0.85rem 1rem;
+            border-radius: 10px;
+            background-color: var(--surface-bg);
+            border: 1px solid var(--border-color);
+            display: none;
+        }
+
+        .auth-panel.visible {
+            display: block;
+        }
+
+        .auth-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .auth-row input {
+            flex: 1;
+        }
+
+        .toggle-pwd-btn {
+            padding: 0.7rem 0.85rem;
+            border-radius: 8px;
+            background: #e5e7eb;
+            color: #374151;
+            font-size: 0.85rem;
+            white-space: nowrap;
+        }
+
+        .remember-row {
+            margin-top: 0.45rem;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.82rem;
+            color: var(--muted-text);
+        }
+
+        .remember-row input {
+            width: auto;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 8px;
+            width: 100%;
+        }
+
+        .input-group input {
+            flex: 1;
+        }
+
+        .size-row {
+            display: grid;
+            grid-template-columns: 1.4fr 1fr 1fr;
+            gap: 8px;
+            width: 100%;
+        }
+
+        .error-banner {
+            width: 100%;
+            padding: 0.75rem 0.9rem;
+            margin-bottom: 0.85rem;
+            border-radius: 8px;
+            background: var(--danger-bg);
+            border: 1px solid var(--danger-border);
+            color: var(--danger-text);
+            font-size: 0.88rem;
+            display: none;
+        }
+
+        .error-banner.visible {
+            display: block;
+        }
+
+        button {
+            padding: 0.75rem 1.2rem;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.95rem;
+            border: none;
+            transition: opacity 0.2s ease, transform 0.15s ease;
+        }
+
+        button:hover:not(:disabled) {
+            opacity: 0.92;
+            transform: translateY(-1px);
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .random-btn {
+            background-color: #3498db;
+            color: #fff;
+            white-space: nowrap;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            width: 100%;
+            margin-top: 0.25rem;
+        }
+
+        .submit-btn {
+            background: #9ca3af;
+            color: #fff;
+            flex: 1;
+            font-weight: 600;
+        }
+
+        .submit-btn.active {
+            background: linear-gradient(to right, var(--primary-color), var(--secondary-color));
+        }
+
+        .download-btn {
+            background: #2ecc71;
+            color: #fff;
+            display: none;
+        }
+
+        .history-btn {
+            background: #3498db;
+            color: #fff;
+        }
+
+        .theme-toggle {
+            position: fixed;
+            top: 14px;
+            right: 14px;
+            background: var(--card-background);
+            border: 1px solid var(--border-color);
+            border-radius: 50%;
+            width: 42px;
+            height: 42px;
+            padding: 0;
+            font-size: 1.2rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.08);
+            z-index: 20;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 30;
+            inset: 0;
+            overflow: auto;
+            background-color: rgba(0, 0, 0, 0.48);
+            padding: 20px;
+        }
+
+        .modal-content {
+            background-color: var(--input-bg);
+            color: var(--text-color);
+            margin: 5vh auto;
+            padding: 20px;
+            width: 100%;
+            max-width: 620px;
+            border-radius: 14px;
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .modal-header h2 {
+            margin: 0;
+            font-size: 1.2rem;
+        }
+
+        .close {
+            color: var(--muted-text);
+            font-size: 26px;
+            line-height: 1;
+            cursor: pointer;
+        }
+
+        .history-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 10px;
+            padding: 10px;
+            background-color: var(--surface-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+        }
+
+        .history-item img {
+            width: 56px;
+            height: 56px;
+            object-fit: cover;
+            border-radius: 6px;
+            flex-shrink: 0;
+            cursor: pointer;
+        }
+
+        .history-meta {
+            flex: 1;
+            min-width: 0;
+            font-size: 0.85rem;
+        }
+
+        .history-prompt {
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            word-break: break-word;
+        }
+
+        .history-sub {
+            color: var(--muted-text);
+            font-size: 0.76rem;
+            margin-top: 4px;
+        }
+
+        .history-item-buttons {
+            display: flex;
+            gap: 6px;
+            flex-shrink: 0;
+        }
+
+        .history-item-buttons button {
+            padding: 6px 10px;
+            font-size: 0.8rem;
+        }
+
+        .redraw-btn {
+            background-color: #3498db;
+            color: #fff;
+        }
+
+        .delete-btn,
+        .clear-history-btn {
+            background-color: #e74c3c;
+            color: #fff;
+        }
+
+        .clear-history-btn {
+            margin-top: 10px;
+            width: 100%;
+        }
+
+        .footer {
+            width: 100%;
+            text-align: center;
+            margin-top: 1.25rem;
+            padding-top: 0.85rem;
+            border-top: 1px solid var(--border-color);
+            color: var(--muted-text);
+            font-size: 0.8rem;
+        }
+
+        .footer a {
+            color: var(--muted-text);
+            text-decoration: none;
+        }
+
+        .footer a:hover {
+            text-decoration: underline;
+        }
+
+        /* 暗色主题 */
+        .dark-theme {
+            --text-color: #ecf0f1;
+            --muted-text: #94a3b8;
+            --card-background: rgba(30, 41, 59, 0.92);
+            --input-bg: #1e293b;
+            --border-color: #475569;
+            --surface-bg: #0f172a;
+            --danger-bg: rgba(185, 28, 28, 0.2);
+            --danger-border: rgba(248, 113, 113, 0.4);
+            --danger-text: #fca5a5;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+        }
+
+        .dark-theme .loading-overlay {
+            background: rgba(15, 23, 42, 0.82);
+            color: #e2e8f0;
+        }
+
+        .dark-theme .toggle-pwd-btn {
+            background: #334155;
+            color: #e2e8f0;
+        }
+
+        @media (max-width: 560px) {
+            .card {
+                padding: 1.25rem;
+                border-radius: 14px;
+            }
+            .size-row {
+                grid-template-columns: 1fr 1fr;
+            }
+            .size-row select {
+                grid-column: 1 / -1;
+            }
+            .button-group {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+<button class="theme-toggle" id="themeToggle" type="button" title="切换深浅主题">🌙</button>
+
+<div class="container">
+    <div class="card">
+        <h1>AI 绘画创作平台</h1>
+
+        <div class="image-container" id="imageContainer">
+            <span class="placeholder-text" id="placeholderText">输入画面描述并点击「开始创作」，生成的图片将显示在这里</span>
+            <img alt="AI 生成的图片" id="aiImage">
+            <div class="loading-overlay" id="loadingOverlay">
+                <div class="loading-spinner"></div>
+                <span id="loadingText">正在调用 Cloudflare Workers AI 生成图片...</span>
+            </div>
+        </div>
+
+        <div class="error-banner" id="errorBanner"></div>
+
+        <div class="field-block">
+            <div class="field-label">
+                <label for="model">选择模型</label>
+                <span id="authBadge">公开可用</span>
+            </div>
+            <select id="model">
+                <optgroup label="公开模型（免密码 · 每日免费额度高）">
+                    <option value="flux-2-klein-4b" selected>FLUX.2 [klein] 4B（推荐 · 速度快 / 约 95 张/天）</option>
+                    <option value="flux-1-schnell">FLUX.1 [schnell]（经典高速 / 约 173 张/天）</option>
+                </optgroup>
+                <optgroup label="高级模型（需管理员密码）">
+                    <option value="flux-2-klein-9b">🔒 FLUX.2 [klein] 9B（9B 高画质）</option>
+                    <option value="flux-2-dev">🔒 FLUX.2 [dev]（高写实细节）</option>
+                    <option value="lucid-origin">🔒 Leonardo Lucid Origin（平面设计 / 文字精准）</option>
+                    <option value="phoenix-1.0">🔒 Leonardo Phoenix 1.0（强提示词遵循 / 支持反向词）</option>
+                </optgroup>
+            </select>
+            <div class="model-hint" id="modelHint">支持自定义分辨率（256–1920），固定 4 步高速生成。</div>
+        </div>
+
+        <div class="auth-panel" id="authPanel">
+            <div class="field-label">
+                <label for="adminPassword">管理员密码</label>
+                <span>环境变量 ADMIN_PASSWORD</span>
+            </div>
+            <div class="auth-row">
+                <input id="adminPassword" type="password" placeholder="使用高级模型请输入管理员密码..." autocomplete="current-password">
+                <button type="button" class="toggle-pwd-btn" id="togglePwdBtn">显示</button>
+            </div>
+            <label class="remember-row">
+                <input type="checkbox" id="rememberPassword">
+                <span>在本机浏览器记住密码（localStorage）</span>
+            </label>
+        </div>
+
+        <div class="field-block">
+            <div class="field-label">
+                <label for="prompt">画面描述词（Prompt）</label>
+                <span>Ctrl + Enter 快速生成</span>
+            </div>
+            <div class="input-group">
+                <input id="prompt" type="text" placeholder="请输入你想要创作的画面描述（推荐英文提示词）...">
+                <button class="random-btn" id="randomButton" type="button">随机提示词</button>
+            </div>
+        </div>
+
+        <div class="field-block" id="negativePromptBlock" style="display: none;">
+            <div class="field-label">
+                <label for="negativePrompt">反向提示词（可选 · 仅 Phoenix 1.0 支持）</label>
+            </div>
+            <input id="negativePrompt" type="text" placeholder="输入希望画面避免出现的元素，例如 blurry, low quality...">
+        </div>
+
+        <div class="field-block" id="sizeBlock">
+            <div class="field-label">
+                <label for="size-select">输出尺寸（像素）</label>
+                <span id="sizeLimitHint">范围：256–1920</span>
+            </div>
+            <div class="size-row">
+                <select id="size-select">
+                    <option value="1x1" selected>正方形 1:1 (1024×1024)</option>
+                    <option value="16x9-horizontal">横屏 16:9 (1024×576)</option>
+                    <option value="16x9-vertical">竖屏 16:9 (576×1024)</option>
+                    <option value="4x3-horizontal">横屏 4:3 (1024×768)</option>
+                    <option value="4x3-vertical">竖屏 4:3 (768×1024)</option>
+                    <option value="custom">自定义尺寸</option>
+                </select>
+                <input id="width-input" type="number" min="256" max="1920" value="1024" disabled placeholder="宽度">
+                <input id="height-input" type="number" min="256" max="1920" value="1024" disabled placeholder="高度">
+            </div>
+        </div>
+
+        <div class="button-group">
+            <button class="submit-btn" id="submitButton" type="button">开始创作</button>
+            <button class="download-btn" id="downloadBtn" type="button">下载图片</button>
+            <button class="history-btn" id="historyBtn" type="button">历史记录</button>
+        </div>
+
+        <footer class="footer">
+            Powered by <a href="https://developers.cloudflare.com/workers-ai/" target="_blank" rel="noopener">Cloudflare Workers AI</a>
+        </footer>
+    </div>
+</div>
+
+<div class="modal" id="historyModal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>历史记录（仅保存在本地）</h2>
+            <span class="close" id="closeModalBtn">&times;</span>
+        </div>
+        <div id="historyList"></div>
+        <button class="clear-history-btn" id="clearHistoryBtn" type="button">清空历史记录</button>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const MODEL_META = {
+        'flux-2-klein-4b': {
+            label: 'FLUX.2 [klein] 4B',
+            requiresAuth: false,
+            supportsSize: true,
+            maxSize: 1920,
+            supportsNegative: false,
+            hint: '公开模型，支持自定义分辨率（256–1920），固定 4 步高速生成。'
+        },
+        'flux-1-schnell': {
+            label: 'FLUX.1 [schnell]',
+            requiresAuth: false,
+            supportsSize: false,
+            maxSize: 1024,
+            supportsNegative: false,
+            hint: '公开模型，固定默认分辨率，4 步快速出图，免费额度最耐用。'
+        },
+        'flux-2-klein-9b': {
+            label: 'FLUX.2 [klein] 9B',
+            requiresAuth: true,
+            supportsSize: true,
+            maxSize: 1920,
+            supportsNegative: false,
+            hint: '高级模型（需管理员密码），9B 参数高画质，支持 256–1920 分辨率。'
+        },
+        'flux-2-dev': {
+            label: 'FLUX.2 [dev]',
+            requiresAuth: true,
+            supportsSize: true,
+            maxSize: 1920,
+            supportsNegative: false,
+            hint: '高级模型（需管理员密码），高写实细节，生成耗时略长。'
+        },
+        'lucid-origin': {
+            label: 'Leonardo Lucid Origin',
+            requiresAuth: true,
+            supportsSize: true,
+            maxSize: 2500,
+            supportsNegative: false,
+            hint: '高级模型（需管理员密码），平面设计与文字渲染强，最高支持 2500×2500。'
+        },
+        'phoenix-1.0': {
+            label: 'Leonardo Phoenix 1.0',
+            requiresAuth: true,
+            supportsSize: true,
+            maxSize: 2048,
+            supportsNegative: true,
+            hint: '高级模型（需管理员密码），提示词遵循度高，支持反向提示词，最高 2048×2048。'
+        }
+    };
+
+    const PROMPTS = [
+        '1girl, solo, cute, sunlit meadow, soft breeze, blue sky with cirrus clouds, blonde hair, white pleated dress, anime illustration, masterpiece, best quality',
+        'A Chinese couple in Hanfu standing on an ancient stone arch bridge under a giant glowing full moon, drifting rose petals, reflections on water, traditional Chinese ink wash painting style',
+        'Cyberpunk neon alleyway in Tokyo after rain, wet asphalt reflections, warm ramen shop lantern glow, cinematic photography, 35mm lens, shallow depth of field',
+        'Minimalist studio product photography of a frosted glass perfume bottle on a travertine stone pedestal, warm morning sunlight shadows, crisp editorial aesthetic',
+        'Isometric cozy Japanese study room at night, warm desk lamp, bookshelves, steaming matcha tea, rain outside the window, lo-fi illustration style',
+        'An ancient wooden pavilion on a misty tea mountain at dawn, flowing white clouds, pine trees, tranquil Chinese landscape art, ultra detailed',
+        'A fluffy calico cat wearing tiny round glasses reading a miniature book inside a sunlit library, whimsical digital painting, warm tones',
+        'Poster design with bold clean typography reading "HELLO WORLD", Bauhaus geometric shapes in cobalt blue, vermilion red, and cream paper texture'
+    ];
+
+    const HISTORY_KEY = 'cfAiDrawingHistory_v2';
+    const PASSWORD_KEY = 'cfAiAdminPassword';
+    const THEME_KEY = 'cfAiTheme';
+    const MAX_HISTORY_ITEMS = 12;
+
+    const modelSelect = document.getElementById('model');
+    const authBadge = document.getElementById('authBadge');
+    const modelHint = document.getElementById('modelHint');
+    const authPanel = document.getElementById('authPanel');
+    const adminPasswordInput = document.getElementById('adminPassword');
+    const togglePwdBtn = document.getElementById('togglePwdBtn');
+    const rememberPasswordCheckbox = document.getElementById('rememberPassword');
+    const promptInput = document.getElementById('prompt');
+    const negativePromptBlock = document.getElementById('negativePromptBlock');
+    const negativePromptInput = document.getElementById('negativePrompt');
+    const randomButton = document.getElementById('randomButton');
+    const sizeBlock = document.getElementById('sizeBlock');
+    const sizeSelect = document.getElementById('size-select');
+    const sizeLimitHint = document.getElementById('sizeLimitHint');
+    const widthInput = document.getElementById('width-input');
+    const heightInput = document.getElementById('height-input');
+    const submitButton = document.getElementById('submitButton');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const historyBtn = document.getElementById('historyBtn');
+    const aiImage = document.getElementById('aiImage');
+    const placeholderText = document.getElementById('placeholderText');
+    const loadingOverlay = document.getElementById('loadingOverlay');
+    const errorBanner = document.getElementById('errorBanner');
+    const modal = document.getElementById('historyModal');
+    const closeModalBtn = document.getElementById('closeModalBtn');
+    const historyList = document.getElementById('historyList');
+    const clearHistoryBtn = document.getElementById('clearHistoryBtn');
+    const themeToggle = document.getElementById('themeToggle');
+
+    let history = [];
+    try {
+        history = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
+        if (!Array.isArray(history)) history = [];
+    } catch {
+        history = [];
+    }
+
+    // 恢复已保存的管理员密码（仅当用户勾选过记住）
+    const savedPassword = localStorage.getItem(PASSWORD_KEY);
+    if (savedPassword) {
+        adminPasswordInput.value = savedPassword;
+        rememberPasswordCheckbox.checked = true;
+    }
+
+    // 恢复主题
+    if (localStorage.getItem(THEME_KEY) === 'dark') {
+        document.body.classList.add('dark-theme');
+        themeToggle.textContent = '🌞';
+    }
+
+    function showError(msg) {
+        errorBanner.textContent = msg;
+        errorBanner.classList.add('visible');
+    }
+
+    function clearError() {
+        errorBanner.textContent = '';
+        errorBanner.classList.remove('visible');
+    }
+
+    function updateSubmitButtonState() {
+        if (promptInput.value.trim()) {
+            submitButton.classList.add('active');
+        } else {
+            submitButton.classList.remove('active');
+        }
+    }
+
+    function syncModelUI() {
+        const meta = MODEL_META[modelSelect.value];
+        if (!meta) return;
+
+        authBadge.textContent = meta.requiresAuth ? '🔒 需管理员密码' : '公开可用';
+        modelHint.textContent = meta.hint;
+        authPanel.classList.toggle('visible', meta.requiresAuth);
+        negativePromptBlock.style.display = meta.supportsNegative ? 'block' : 'none';
+
+        sizeSelect.disabled = !meta.supportsSize;
+        if (!meta.supportsSize) {
+            widthInput.disabled = true;
+            heightInput.disabled = true;
+            sizeLimitHint.textContent = '当前模型使用默认尺寸';
+        } else {
+            widthInput.max = meta.maxSize;
+            heightInput.max = meta.maxSize;
+            sizeLimitHint.textContent = `范围：256–${meta.maxSize}`;
+            const isCustom = sizeSelect.value === 'custom';
+            widthInput.disabled = !isCustom;
+            heightInput.disabled = !isCustom;
+        }
+    }
+
+    function applyPresetSize() {
+        const val = sizeSelect.value;
+        const meta = MODEL_META[modelSelect.value];
+        if (!meta?.supportsSize) return;
+
+        if (val === 'custom') {
+            widthInput.disabled = false;
+            heightInput.disabled = false;
+            return;
+        }
+
+        widthInput.disabled = true;
+        heightInput.disabled = true;
+
+        const presets = {
+            '1x1': [1024, 1024],
+            '16x9-horizontal': [1024, 576],
+            '16x9-vertical': [576, 1024],
+            '4x3-horizontal': [1024, 768],
+            '4x3-vertical': [768, 1024]
+        };
+        const [w, h] = presets[val] || [1024, 1024];
+        widthInput.value = w;
+        heightInput.value = h;
+    }
+
+    function persistHistory() {
+        while (history.length > MAX_HISTORY_ITEMS) {
+            history.pop();
+        }
+        while (history.length > 0) {
+            try {
+                localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+                return;
+            } catch {
+                // 超出 localStorage 配额时移除最早记录
+                history.pop();
+            }
+        }
+        try {
+            localStorage.removeItem(HISTORY_KEY);
+        } catch {}
+    }
+
+    function createThumbnailDataUrl(blob, maxEdge = 384) {
+        return new Promise((resolve) => {
+            const url = URL.createObjectURL(blob);
+            const img = new Image();
+            img.onload = () => {
+                const scale = Math.min(1, maxEdge / Math.max(img.width, img.height));
+                const canvas = document.createElement('canvas');
+                canvas.width = Math.max(1, Math.round(img.width * scale));
+                canvas.height = Math.max(1, Math.round(img.height * scale));
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                URL.revokeObjectURL(url);
+                resolve(canvas.toDataURL('image/jpeg', 0.8));
+            };
+            img.onerror = () => {
+                URL.revokeObjectURL(url);
+                resolve('');
+            };
+            img.src = url;
+        });
+    }
+
+    function renderHistory() {
+        historyList.innerHTML = '';
+        if (history.length === 0) {
+            historyList.innerHTML = '<p style="text-align:center;color:var(--muted-text);">暂无历史记录</p>';
+            return;
+        }
+        history.forEach((item, index) => {
+            const row = document.createElement('div');
+            row.className = 'history-item';
+
+            const img = document.createElement('img');
+            img.src = item.thumbUrl;
+            img.alt = item.prompt;
+            img.title = '点击预览缩略图';
+            img.addEventListener('click', () => {
+                aiImage.src = item.thumbUrl;
+                aiImage.style.display = 'block';
+                placeholderText.style.display = 'none';
+                downloadBtn.style.display = 'inline-block';
+                modal.style.display = 'none';
+            });
+
+            const metaDiv = document.createElement('div');
+            metaDiv.className = 'history-meta';
+
+            const promptDiv = document.createElement('div');
+            promptDiv.className = 'history-prompt';
+            promptDiv.textContent = item.prompt;
+
+            const subDiv = document.createElement('div');
+            subDiv.className = 'history-sub';
+            const modelName = MODEL_META[item.model]?.label || item.model || '未知模型';
+            subDiv.textContent = `${modelName} · ${new Date(item.timestamp).toLocaleString()}`;
+
+            metaDiv.appendChild(promptDiv);
+            metaDiv.appendChild(subDiv);
+
+            const btns = document.createElement('div');
+            btns.className = 'history-item-buttons';
+
+            const redrawBtn = document.createElement('button');
+            redrawBtn.className = 'redraw-btn';
+            redrawBtn.type = 'button';
+            redrawBtn.textContent = '重绘';
+            redrawBtn.addEventListener('click', () => {
+                if (item.model && MODEL_META[item.model]) {
+                    modelSelect.value = item.model;
+                    syncModelUI();
+                }
+                promptInput.value = item.prompt;
+                updateSubmitButtonState();
+                modal.style.display = 'none';
+                generateImage();
+            });
+
+            const deleteBtn = document.createElement('button');
+            deleteBtn.className = 'delete-btn';
+            deleteBtn.type = 'button';
+            deleteBtn.textContent = '删除';
+            deleteBtn.addEventListener('click', () => {
+                history.splice(index, 1);
+                persistHistory();
+                renderHistory();
+            });
+
+            btns.appendChild(redrawBtn);
+            btns.appendChild(deleteBtn);
+
+            row.appendChild(img);
+            row.appendChild(metaDiv);
+            row.appendChild(btns);
+            historyList.appendChild(row);
+        });
+    }
+
+    let currentObjectUrl = null;
+
+    async function generateImage() {
+        clearError();
+
+        const prompt = promptInput.value.trim();
+        const model = modelSelect.value;
+        const meta = MODEL_META[model];
+
+        if (!prompt) {
+            showError('请输入画面描述词（Prompt）');
+            promptInput.focus();
+            return;
+        }
+
+        const headers = { 'Content-Type': 'application/json' };
+        if (meta.requiresAuth) {
+            const pwd = adminPasswordInput.value.trim();
+            if (!pwd) {
+                showError(`使用 ${meta.label} 需要先输入管理员密码`);
+                adminPasswordInput.focus();
+                return;
+            }
+            headers['X-Admin-Password'] = pwd;
+            if (rememberPasswordCheckbox.checked) {
+                localStorage.setItem(PASSWORD_KEY, pwd);
+            } else {
+                localStorage.removeItem(PASSWORD_KEY);
+            }
+        }
+
+        const payload = {
+            model,
+            prompt
+        };
+
+        if (meta.supportsSize) {
+            payload.resolution = {
+                width: parseInt(widthInput.value, 10) || 1024,
+                height: parseInt(heightInput.value, 10) || 1024
+            };
+        }
+
+        if (meta.supportsNegative && negativePromptInput.value.trim()) {
+            payload.negative_prompt = negativePromptInput.value.trim();
+        }
+
+        submitButton.disabled = true;
+        submitButton.textContent = '正在创作...';
+        loadingOverlay.style.display = 'flex';
+
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 180000);
+
+        try {
+            const response = await fetch(window.location.origin, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(payload),
+                signal: controller.signal
+            });
+
+            if (!response.ok) {
+                let errMsg = `请求失败（HTTP ${response.status}）`;
+                try {
+                    const errJson = await response.json();
+                    if (errJson?.error) errMsg = errJson.error;
+                } catch {}
+                throw new Error(errMsg);
+            }
+
+            const blob = await response.blob();
+            if (currentObjectUrl) {
+                URL.revokeObjectURL(currentObjectUrl);
+            }
+            currentObjectUrl = URL.createObjectURL(blob);
+
+            aiImage.src = currentObjectUrl;
+            aiImage.style.display = 'block';
+            placeholderText.style.display = 'none';
+            downloadBtn.style.display = 'inline-block';
+
+            const thumbUrl = await createThumbnailDataUrl(blob);
+            if (thumbUrl) {
+                history.unshift({
+                    prompt,
+                    model,
+                    thumbUrl,
+                    timestamp: Date.now()
+                });
+                persistHistory();
+            }
+        } catch (error) {
+            if (error.name === 'AbortError') {
+                showError('生成超时，请稍后重试或换用速度更快的模型。');
+            } else {
+                showError(error.message || '生成失败，请稍后重试。');
+            }
+        } finally {
+            clearTimeout(timer);
+            submitButton.disabled = false;
+            submitButton.textContent = '开始创作';
+            loadingOverlay.style.display = 'none';
+        }
+    }
+
+    // 事件绑定
+    modelSelect.addEventListener('change', () => {
+        clearError();
+        syncModelUI();
+    });
+
+    sizeSelect.addEventListener('change', applyPresetSize);
+
+    promptInput.addEventListener('input', updateSubmitButtonState);
+
+    randomButton.addEventListener('click', () => {
+        const nextPrompt = PROMPTS[Math.floor(Math.random() * PROMPTS.length)];
+        promptInput.value = nextPrompt;
+        updateSubmitButtonState();
+    });
+
+    togglePwdBtn.addEventListener('click', () => {
+        const isHidden = adminPasswordInput.type === 'password';
+        adminPasswordInput.type = isHidden ? 'text' : 'password';
+        togglePwdBtn.textContent = isHidden ? '隐藏' : '显示';
+    });
+
+    rememberPasswordCheckbox.addEventListener('change', () => {
+        if (!rememberPasswordCheckbox.checked) {
+            localStorage.removeItem(PASSWORD_KEY);
+        } else if (adminPasswordInput.value.trim()) {
+            localStorage.setItem(PASSWORD_KEY, adminPasswordInput.value.trim());
+        }
+    });
+
+    submitButton.addEventListener('click', generateImage);
+
+    downloadBtn.addEventListener('click', () => {
+        if (!aiImage.src) return;
+        const link = document.createElement('a');
+        link.href = aiImage.src;
+        link.download = `ai-artwork-${modelSelect.value}-${Date.now()}.png`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    });
+
+    historyBtn.addEventListener('click', () => {
+        renderHistory();
+        modal.style.display = 'block';
+    });
+
+    closeModalBtn.addEventListener('click', () => {
+        modal.style.display = 'none';
+    });
+
+    window.addEventListener('click', (e) => {
+        if (e.target === modal) modal.style.display = 'none';
+    });
+
+    clearHistoryBtn.addEventListener('click', () => {
+        if (confirm('确定要清空所有本地历史记录吗？')) {
+            history = [];
+            persistHistory();
+            renderHistory();
+        }
+    });
+
+    themeToggle.addEventListener('click', () => {
+        const isDark = document.body.classList.toggle('dark-theme');
+        themeToggle.textContent = isDark ? '🌞' : '🌙';
+        localStorage.setItem(THEME_KEY, isDark ? 'dark' : 'light');
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+            generateImage();
+        }
+    });
+
+    syncModelUI();
+    updateSubmitButtonState();
+});
+</script>
+</body>
+</html>
