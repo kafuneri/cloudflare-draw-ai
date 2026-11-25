@@ -165,7 +165,9 @@ async function generateEnhancedPrompt(env, rawPrompt) {
       { role: 'system', content: systemInstruction },
       { role: 'user', content: userMessage },
     ],
-    max_completion_tokens: 512,
+    // 关闭 Gemma 4 默认思考模式，避免 token 全消耗在 reasoning 导致 content 为空
+    chat_template_kwargs: { enable_thinking: false },
+    max_tokens: 512,
     temperature: 0.75,
   });
 
