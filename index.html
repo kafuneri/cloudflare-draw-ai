@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <title>AI 绘画创作平台</title>
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <meta name="description" content="基于 Cloudflare Workers AI 的在线 AI 绘画工具，支持 FLUX.2、FLUX.1 与 Leonardo 模型。">
+    <meta name="description" content="基于 Cloudflare Workers AI 的在线 AI 绘画工具，支持 FLUX.2、FLUX.1、Leonardo 模型及可选 Gemma 4 提示词生成。">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black">
     <meta name="apple-mobile-web-app-title" content="AI 绘画">
@@ -12,6 +12,7 @@
         :root {
             --primary-color: #4facfe;
             --secondary-color: #00f2fe;
+            --accent-purple: #8b5cf6;
             --text-color: #2c3e50;
             --muted-text: #6b7280;
             --card-background: rgba(255, 255, 255, 0.92);
@@ -53,7 +54,7 @@
             padding: 2rem;
             box-shadow: 0 12px 28px rgba(0, 0, 0, 0.1);
             width: 100%;
-            max-width: 640px;
+            max-width: 660px;
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -74,7 +75,7 @@
             min-height: 320px;
             max-height: 460px;
             border-radius: 12px;
-            margin-bottom: 1rem;
+            margin-bottom: 0.85rem;
             background-color: rgba(0, 0, 0, 0.04);
             border: 1px dashed var(--border-color);
             display: flex;
@@ -110,6 +111,8 @@
             z-index: 10;
             font-size: 0.95rem;
             color: #334155;
+            text-align: center;
+            padding: 1rem;
         }
 
         .loading-spinner {
@@ -123,6 +126,28 @@
 
         @keyframes spin {
             to { transform: rotate(360deg); }
+        }
+
+        .enhanced-prompt-box {
+            width: 100%;
+            margin-bottom: 0.85rem;
+            padding: 0.65rem 0.85rem;
+            border-radius: 8px;
+            background: var(--surface-bg);
+            border: 1px solid var(--border-color);
+            font-size: 0.82rem;
+            color: var(--muted-text);
+            display: none;
+            word-break: break-word;
+            line-height: 1.45;
+        }
+
+        .enhanced-prompt-box.visible {
+            display: block;
+        }
+
+        .enhanced-prompt-box strong {
+            color: var(--text-color);
         }
 
         .field-block {
@@ -142,19 +167,28 @@
         select,
         input[type="text"],
         input[type="password"],
-        input[type="number"] {
+        input[type="number"],
+        textarea {
             width: 100%;
             padding: 0.7rem 0.85rem;
             border: 1px solid var(--border-color);
             border-radius: 8px;
             font-size: 0.95rem;
+            font-family: inherit;
             background-color: var(--input-bg);
             color: var(--text-color);
             transition: border-color 0.2s ease, box-shadow 0.2s ease;
         }
 
+        textarea {
+            resize: vertical;
+            min-height: 74px;
+            line-height: 1.45;
+        }
+
         select:focus,
-        input:focus {
+        input:focus,
+        textarea:focus {
             outline: none;
             border-color: var(--primary-color);
             box-shadow: 0 0 0 3px rgba(79, 172, 254, 0.2);
@@ -205,27 +239,35 @@
             white-space: nowrap;
         }
 
-        .remember-row {
+        .check-row {
             margin-top: 0.45rem;
             display: flex;
             align-items: center;
             gap: 6px;
             font-size: 0.82rem;
             color: var(--muted-text);
+            cursor: pointer;
+            user-select: none;
         }
 
-        .remember-row input {
+        .check-row input {
             width: auto;
+            margin: 0;
         }
 
-        .input-group {
+        .prompt-tools {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 0.5rem;
+        }
+
+        .prompt-tool-btns {
             display: flex;
             gap: 8px;
-            width: 100%;
-        }
-
-        .input-group input {
-            flex: 1;
+            flex-wrap: wrap;
         }
 
         .size-row {
@@ -252,10 +294,10 @@
         }
 
         button {
-            padding: 0.75rem 1.2rem;
+            padding: 0.7rem 1.1rem;
             border-radius: 8px;
             cursor: pointer;
-            font-size: 0.95rem;
+            font-size: 0.92rem;
             border: none;
             transition: opacity 0.2s ease, transform 0.15s ease;
         }
@@ -273,6 +315,16 @@
         .random-btn {
             background-color: #3498db;
             color: #fff;
+            padding: 0.5rem 0.85rem;
+            font-size: 0.85rem;
+            white-space: nowrap;
+        }
+
+        .ai-prompt-btn {
+            background: linear-gradient(135deg, #8b5cf6, #6366f1);
+            color: #fff;
+            padding: 0.5rem 0.85rem;
+            font-size: 0.85rem;
             white-space: nowrap;
         }
 
@@ -288,6 +340,7 @@
             color: #fff;
             flex: 1;
             font-weight: 600;
+            padding: 0.78rem 1.2rem;
         }
 
         .submit-btn.active {
@@ -506,11 +559,13 @@
             </div>
         </div>
 
+        <div class="enhanced-prompt-box" id="enhancedPromptBox"></div>
+
         <div class="error-banner" id="errorBanner"></div>
 
         <div class="field-block">
             <div class="field-label">
-                <label for="model">选择模型</label>
+                <label for="model">选择生图模型</label>
                 <span id="authBadge">公开可用</span>
             </div>
             <select id="model">
@@ -537,7 +592,7 @@
                 <input id="adminPassword" type="password" placeholder="使用高级模型请输入管理员密码..." autocomplete="current-password">
                 <button type="button" class="toggle-pwd-btn" id="togglePwdBtn">显示</button>
             </div>
-            <label class="remember-row">
+            <label class="check-row">
                 <input type="checkbox" id="rememberPassword">
                 <span>在本机浏览器记住密码（localStorage）</span>
             </label>
@@ -548,9 +603,16 @@
                 <label for="prompt">画面描述词（Prompt）</label>
                 <span>Ctrl + Enter 快速生成</span>
             </div>
-            <div class="input-group">
-                <input id="prompt" type="text" placeholder="请输入你想要创作的画面描述（推荐英文提示词）...">
-                <button class="random-btn" id="randomButton" type="button">随机提示词</button>
+            <textarea id="prompt" placeholder="直接输入自然语言描述（中英文皆可），或点下方随机 / Gemma 4 AI 生成提示词..."></textarea>
+            <div class="prompt-tools">
+                <label class="check-row" style="margin-top: 0;">
+                    <input type="checkbox" id="autoEnhanceToggle">
+                    <span>生图时自动用 Gemma 4 优化/翻译提示词（可选）</span>
+                </label>
+                <div class="prompt-tool-btns">
+                    <button class="random-btn" id="randomButton" type="button">🎲 随机提示词</button>
+                    <button class="ai-prompt-btn" id="aiPromptButton" type="button" title="留空可随机灵感生成，有内容时自动翻译润色">✨ AI 生成/润色</button>
+                </div>
             </div>
         </div>
 
@@ -657,14 +719,45 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const PROMPTS = [
-        '1girl, solo, cute, sunlit meadow, soft breeze, blue sky with cirrus clouds, blonde hair, white pleated dress, anime illustration, masterpiece, best quality',
-        'A Chinese couple in Hanfu standing on an ancient stone arch bridge under a giant glowing full moon, drifting rose petals, reflections on water, traditional Chinese ink wash painting style',
-        'Cyberpunk neon alleyway in Tokyo after rain, wet asphalt reflections, warm ramen shop lantern glow, cinematic photography, 35mm lens, shallow depth of field',
-        'Minimalist studio product photography of a frosted glass perfume bottle on a travertine stone pedestal, warm morning sunlight shadows, crisp editorial aesthetic',
-        'Isometric cozy Japanese study room at night, warm desk lamp, bookshelves, steaming matcha tea, rain outside the window, lo-fi illustration style',
-        'An ancient wooden pavilion on a misty tea mountain at dawn, flowing white clouds, pine trees, tranquil Chinese landscape art, ultra detailed',
-        'A fluffy calico cat wearing tiny round glasses reading a miniature book inside a sunlit library, whimsical digital painting, warm tones',
-        'Poster design with bold clean typography reading "HELLO WORLD", Bauhaus geometric shapes in cobalt blue, vermilion red, and cream paper texture'
+        // 二次元与动漫插画
+        'A cheerful anime girl with flowing blonde hair and a white pleated sundress standing in a sunlit summer meadow, cirrus clouds in a vivid blue sky, gentle breeze, warm golden rim light, crisp Makoto Shinkai inspired anime illustration',
+        'An anime silver-haired elf archer resting beneath a giant glowing ginkgo tree in autumn, golden leaves drifting through shafts of afternoon light, detailed leather capelet and emerald brooch, painterly fantasy illustration',
+        'A cozy Ghibli-style hillside bakery overlooking a sparkling coastal town at sunset, warm bread glowing inside wooden windows, fluffy cumulus clouds tinted peach and lavender, hand-painted watercolor texture',
+        'A high school rooftop in Tokyo during golden hour, two students leaning on the chain-link fence watching a distant train cross a river, long shadows, warm nostalgia, cinematic anime key visual',
+        'A futuristic cyber-witch girl floating above a neon metropolis with holographic rune circles and translucent crystal wings, indigo night sky, vibrant cyan and magenta accents, refined Japanese digital art',
+
+        // 国风与东方美学
+        'A Chinese couple in flowing Tang-dynasty Hanfu standing on a curved stone arch bridge beneath a luminous full moon, drifting rose petals, shimmering water reflections, poetic Chinese ink-wash and watercolor painting',
+        'An ancient wooden tea pavilion perched on a misty mountain cliff at dawn, swirling sea of white clouds, gnarled pine trees, distant waterfall, traditional blue-green Shan Shui landscape style',
+        'A quiet Jiangnan water town alleyway in spring rain, white-washed walls and black-tiled roofs, red lanterns glowing softly over wet cobblestones and a moored wooden boat, atmospheric oil-and-ink fusion',
+        'A Dunhuang mural inspired celestial dancer playing a pipa amid swirling silk ribbons and lotus clouds, mineral pigment palette of lapis lazuli, malachite green, and antique gold leaf, intricate fine brushwork',
+        'A serene courtyard in Suzhou during autumn, maple leaves floating in a koi pond beside Taihu scholar rocks and a circular moon gate, soft morning mist, tranquil Chinese aesthetic photography',
+
+        // 电影级写实摄影
+        'Cyberpunk neon alleyway in Shinjuku Tokyo after midnight rain, glossy wet asphalt reflecting red and cyan signs, steam rising from a tiny ramen shop, 35mm cinema lens, shallow depth of field, moody film grain',
+        'A solitary wooden cabin with warm glowing windows standing beneath ribbons of emerald aurora borealis in snowy Iceland, starry arctic sky, crisp reflections on a frozen lake, wide-angle landscape photography',
+        'A vintage steam locomotive crossing a stone viaduct over a misty Scottish valley at sunrise, dramatic golden rays breaking through low clouds, rich natural colors, National Geographic style photography',
+        'Golden hour portrait of a street musician playing an acoustic guitar on a cobbled Lisbon tram street, warm amber sunlight, soft lens flare, authentic candid 50mm f/1.4 film photography',
+        'Aerial top-down drone photograph of turquoise ocean waves curling gently onto a pink sand cove surrounded by rugged limestone cliffs, crystal clear water, bright midday sun, crisp natural detail',
+
+        // 室内、微缩与等距视角
+        'Isometric cozy Japanese study room at night, warm brass desk lamp, floor-to-ceiling wooden bookshelves, steaming cup of matcha tea, rain streaks on the window overlooking city lights, clean lo-fi 3D illustration',
+        'A magical glass terrarium sitting on a sunlit oak workbench, containing a tiny glowing waterfall, mossy stone bridge, miniature pine trees, and fireflies, macro photography with dreamy bokeh',
+        'A whimsical treehouse coffee shop nestled inside the branches of an ancient banyan tree, string lights twinkling at dusk, spiral wooden staircase, aroma of espresso, warm storybook illustration',
+        'A grand spiral library built inside a glass dome looking up at the Milky Way, floating brass astrolabes, warm candlelight along mahogany shelves, epic architectural fantasy art',
+
+        // 平面设计、海报与产品静物
+        'Minimalist studio product photography of a frosted amber glass perfume bottle resting on a sculpted travertine stone pedestal, crisp diagonal morning window shadows, neutral sand backdrop, high-end editorial aesthetic',
+        'Bold Swiss Bauhaus exhibition poster design with crisp geometric circles and triangles in cobalt blue, vermilion red, and warm cream paper texture, clean typography reading "DESIGN 2026"',
+        'A retro Japanese city-pop vinyl album cover showing a classic white convertible parked by a palm-lined sunset beach, pastel pink and turquoise horizon, subtle halftone print grain',
+        'Overhead flat-lay food photography of freshly baked matcha croissants, handmade ceramic pour-over coffee dripper, linen napkin, and scattered blueberries on a rustic slate table, soft diffused morning light',
+
+        // 萌宠与奇幻生物
+        'A fluffy calico cat wearing tiny round brass glasses reading a miniature leather-bound book on a stack of encyclopedias inside a sunlit vintage library, whimsical digital painting, cozy warm tones',
+        'A cheerful Shiba Inu chef wearing a white headband serving a steaming bowl of tonkotsu ramen at a tiny wooden izakaya counter at night, warm lantern light, charming Pixar-inspired 3D render',
+        'A translucent crystal fox standing in a bioluminescent midnight forest, soft ice-blue light refracting through its tail, glowing fern spores floating in the air, ethereal fantasy concept art',
+        'A steampunk clockwork owl perched on a brass telescope overlooking foggy Victorian rooftops at twilight, intricate copper gears, glowing amber eyes, detailed cinematic illustration',
+        'A tiny red panda wrapped in a knitted scarf sipping hot cocoa beside a snowy mountain campsite under a pastel twilight sky, heartwarming storybook art style'
     ];
 
     const HISTORY_KEY = 'cfAiDrawingHistory_v2';
@@ -680,10 +773,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const togglePwdBtn = document.getElementById('togglePwdBtn');
     const rememberPasswordCheckbox = document.getElementById('rememberPassword');
     const promptInput = document.getElementById('prompt');
+    const autoEnhanceToggle = document.getElementById('autoEnhanceToggle');
+    const randomButton = document.getElementById('randomButton');
+    const aiPromptButton = document.getElementById('aiPromptButton');
     const negativePromptBlock = document.getElementById('negativePromptBlock');
     const negativePromptInput = document.getElementById('negativePrompt');
-    const randomButton = document.getElementById('randomButton');
-    const sizeBlock = document.getElementById('sizeBlock');
     const sizeSelect = document.getElementById('size-select');
     const sizeLimitHint = document.getElementById('sizeLimitHint');
     const widthInput = document.getElementById('width-input');
@@ -694,6 +788,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const aiImage = document.getElementById('aiImage');
     const placeholderText = document.getElementById('placeholderText');
     const loadingOverlay = document.getElementById('loadingOverlay');
+    const loadingText = document.getElementById('loadingText');
+    const enhancedPromptBox = document.getElementById('enhancedPromptBox');
     const errorBanner = document.getElementById('errorBanner');
     const modal = document.getElementById('historyModal');
     const closeModalBtn = document.getElementById('closeModalBtn');
@@ -701,6 +797,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const clearHistoryBtn = document.getElementById('clearHistoryBtn');
     const themeToggle = document.getElementById('themeToggle');
 
+    let lastRandomIndex = -1;
     let history = [];
     try {
         history = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
@@ -709,14 +806,12 @@ document.addEventListener('DOMContentLoaded', () => {
         history = [];
     }
 
-    // 恢复已保存的管理员密码（仅当用户勾选过记住）
     const savedPassword = localStorage.getItem(PASSWORD_KEY);
     if (savedPassword) {
         adminPasswordInput.value = savedPassword;
         rememberPasswordCheckbox.checked = true;
     }
 
-    // 恢复主题
     if (localStorage.getItem(THEME_KEY) === 'dark') {
         document.body.classList.add('dark-theme');
         themeToggle.textContent = '🌞';
@@ -730,6 +825,22 @@ document.addEventListener('DOMContentLoaded', () => {
     function clearError() {
         errorBanner.textContent = '';
         errorBanner.classList.remove('visible');
+    }
+
+    function showEnhancedPrompt(text) {
+        if (!text) {
+            enhancedPromptBox.classList.remove('visible');
+            enhancedPromptBox.innerHTML = '';
+            return;
+        }
+        enhancedPromptBox.innerHTML = '';
+        const strong = document.createElement('strong');
+        strong.textContent = 'Gemma 4 优化后的提示词：';
+        const span = document.createElement('span');
+        span.textContent = text;
+        enhancedPromptBox.appendChild(strong);
+        enhancedPromptBox.appendChild(span);
+        enhancedPromptBox.classList.add('visible');
     }
 
     function updateSubmitButtonState() {
@@ -799,7 +910,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
                 return;
             } catch {
-                // 超出 localStorage 配额时移除最早记录
                 history.pop();
             }
         }
@@ -905,14 +1015,47 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    async function handleAiPromptEnhance() {
+        clearError();
+        const originalText = promptInput.value.trim();
+        aiPromptButton.disabled = true;
+        aiPromptButton.textContent = originalText ? '✨ 正在润色...' : '✨ 正在生成灵感...';
+
+        try {
+            const response = await fetch(window.location.origin, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'enhance-prompt',
+                    prompt: originalText
+                })
+            });
+
+            const result = await response.json();
+            if (!response.ok || !result?.prompt) {
+                throw new Error(result?.error || `生成提示词失败（HTTP ${response.status}）`);
+            }
+
+            promptInput.value = result.prompt;
+            updateSubmitButtonState();
+        } catch (err) {
+            showError(err.message || 'Gemma 4 提示词生成失败，请稍后重试。');
+        } finally {
+            aiPromptButton.disabled = false;
+            aiPromptButton.textContent = '✨ AI 生成/润色';
+        }
+    }
+
     let currentObjectUrl = null;
 
     async function generateImage() {
         clearError();
+        showEnhancedPrompt('');
 
         const prompt = promptInput.value.trim();
         const model = modelSelect.value;
         const meta = MODEL_META[model];
+        const enhancePrompt = autoEnhanceToggle.checked;
 
         if (!prompt) {
             showError('请输入画面描述词（Prompt）');
@@ -938,7 +1081,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const payload = {
             model,
-            prompt
+            prompt,
+            enhancePrompt
         };
 
         if (meta.supportsSize) {
@@ -954,6 +1098,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
         submitButton.disabled = true;
         submitButton.textContent = '正在创作...';
+        loadingText.textContent = enhancePrompt
+            ? '正在使用 Gemma 4 优化提示词并生成图片...'
+            : '正在调用 Cloudflare Workers AI 生成图片...';
         loadingOverlay.style.display = 'flex';
 
         const controller = new AbortController();
@@ -976,6 +1123,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 throw new Error(errMsg);
             }
 
+            const enhancedHeader = response.headers.get('X-Enhanced-Prompt');
+            const usedPrompt = enhancedHeader ? decodeURIComponent(enhancedHeader) : prompt;
+            if (enhancedHeader) {
+                showEnhancedPrompt(usedPrompt);
+            }
+
             const blob = await response.blob();
             if (currentObjectUrl) {
                 URL.revokeObjectURL(currentObjectUrl);
@@ -990,7 +1143,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const thumbUrl = await createThumbnailDataUrl(blob);
             if (thumbUrl) {
                 history.unshift({
-                    prompt,
+                    prompt: usedPrompt,
                     model,
                     thumbUrl,
                     timestamp: Date.now()
@@ -1022,10 +1175,16 @@ document.addEventListener('DOMContentLoaded', () => {
     promptInput.addEventListener('input', updateSubmitButtonState);
 
     randomButton.addEventListener('click', () => {
-        const nextPrompt = PROMPTS[Math.floor(Math.random() * PROMPTS.length)];
-        promptInput.value = nextPrompt;
+        let nextIndex = Math.floor(Math.random() * PROMPTS.length);
+        if (PROMPTS.length > 1 && nextIndex === lastRandomIndex) {
+            nextIndex = (nextIndex + 1) % PROMPTS.length;
+        }
+        lastRandomIndex = nextIndex;
+        promptInput.value = PROMPTS[nextIndex];
         updateSubmitButtonState();
     });
+
+    aiPromptButton.addEventListener('click', handleAiPromptEnhance);
 
     togglePwdBtn.addEventListener('click', () => {
         const isHidden = adminPasswordInput.type === 'password';
